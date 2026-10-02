@@ -1,0 +1,703 @@
+================================================================================
+CROWNBARBER - SISTEMA DE CITAS PARA BARBERÍA
+Informe técnico completo del trabajo realizado
+================================================================================
+
+ÍNDICE
+--------------------------------------------------------------------------------
+1. Resumen del proyecto
+2. Stack tecnológico
+3. Decisiones de diseño
+4. Base de datos
+5. Backend
+6. Frontend
+7. Flujos de negocio
+8. Bugs reales encontrados y corregidos
+9. Notificaciones
+10. Tests
+11. Verificación y comandos
+12. Notas de entorno
+13. Pendientes / mejoras futuras
+
+================================================================================
+1. RESUMEN DEL PROYECTO
+================================================================================
+
+CrownBarber es una aplicación Laravel + Inertia React para gestionar citas de
+una barbería. Permite:
+
+- Registrar usuarios con 3 roles: cliente (user), barbero (worker) y admin.
+- Al admin/barbero configurar los horarios de apertura (semanal recurrente) y
+  excepciones por fecha (festivos, cierres, horarios especiales).
+- Al cliente agendar una cita en 3 pasos: elige servicios -> día/hora ->
+  barbero. Solo se muestran las horas realmente libres del barbero.
+- Al barbero confirmar o rechazar una solicitud, o proponer una hora
+  alternativa (negociación entre las dos partes).
+- Notificaciones dentro de la app (campanita) para cada cambio de estado.
+- Paneles por rol: dashboard del cliente, del barbero y del admin (con
+  estadísticas generales del negocio).
+
+El flujo de "Web Push" (notificaciones del navegador mediante service worker +
+suscripción VAPID) se llegó a implementar parcialmente, pero POR DECISIÓN DEL
+USUARIO se eliminó por completo: se quitó el paquete minishlink/web-push, la
+configuración, el channel/message, el modelo push_subscriptions, el service
+worker, el hook de suscripción y las llaves VAPID. Las notificaciones en app
+(canal database + campanita) se mantienen y son el canal definitivo.
+
+================================================================================
+2. STACK TECNOLÓGICO
+================================================================================
+
+- PHP 8.5 / Laravel 13 (framework principal).
+- MySQL como motor de base de datos (SQLite en memoria para los tests).
+- Inertia.js v3 (@inertiajs/react) como conector SPA.
+- React 19 + TypeScript.
+- Tailwind CSS v4 (a través de @tailwindcss/vite).
+- HeroUI v3 (antiguo NextUI) para componentes de interfaz (Modal, etc.).
+- lucide-react para iconografía.
+- Pest (Pest 5) para testing.
+- Laravel Wayfinder (rutas tipadas en el frontend vía `route()` / @/routes).
+- Ziggy para generar las rutas tipadas en JS.
+- Laravel Pint como formateador de código PHP.
+
+Confirmar versiones exactas con:
+    composer show --direct
+    cat package.json
+
+================================================================================
+3. DECISIONES DE DISEÑO
+================================================================================
+
+1. ROLES: enum App\UserRoles { Admin='admin', Worker='worker', User='user' }.
+   - "user" (cliente) solo agenda.
+   - "worker" y "admin" ejercen de barbero en el sistema de citas.
+   - Un admin también puede ser barbero: ve sus citas asignadas como tal.
+
+2. AGENDA: solo el rol "user" crea citas. El barbero (worker/admin) nunca crea
+   citas; administra las solicitudes que le llegan.
+
+3. HORARIOS:
+   - BusinessHour: horario semanal recurrente (día de semana -> open/close).
+   - BusinessHourOverride: excepción por fecha concreta (cerrado o con horario
+     especial). SIEMPRE tiene prioridad sobre el semanal.
+   - Los slots se generan cada 30 minutos y solo se ofrecen horas libres del
+     barbero (sin conflicto con otras citas activas).
+
+4. NEGOCIACIÓN DE HORA:
+   - Estado inicial de una cita: pending.
+   - El barbero puede confirmarla (confirmed), rechazarla (cancelled) o
+     proponer otra hora (proposed + proposed_starts_at + proposed_by).
+   - En estado proposed, el usuario puede confirmar (se toma la hora propuesta),
+     rechazar, o proponer a su vez otra hora. La negociación puede alternar.
+   - Solo se puede proponer/cancelar en estados pending/proposed.
+   - La cita confirmada y futura puede ser cancelada por cualquiera de las dos
+     partes.
+
+5. SNAPSHOT DE SERVICIOS: al crear la cita se copia en la tabla pivote
+   appointment_services el nombre y precio de cada servicio en ese momento, de
+   modo que el historial no cambia si el admin edita el catálogo.
+
+6. NOTIFICACIONES: canal "database" (tabla notifications). Cada notificación
+   guarda appointment_id, type, message, starts_at (hora efectiva), actor_name
+   y url. El frontend hace polling cada ~30s contra notifications.latest y
+   recarga los props de Inertia (compartidos en HandleInertiaRequests) para
+   actualizar la campanita.
+
+7. WEB PUSH: ELIMINADO por decisión del usuario (ver sección 9).
+
+================================================================================
+4. BASE DE DATOS
+================================================================================
+
+Migraciones (database/migrations):
+
+- 0001_01_01_000000_create_users_table.php
+    users: id, name, email (unique), phone (unique, not null), password,
+           role (string), email_verified_at, remember_token, timestamps,
+           softDeletes.
+
+- 2026_08_18_182055_create_services_table.php
+    services: id, name, description (nullable), price (decimal 8,2), duration
+              (int, minutos), active (bool), timestamps.
+    (Índice: name)
+
+- 2026_08_20_053927_create_appointments_table.php
+    appointments: id, user_id FK, worker_id FK, starts_at (datetime),
+                  status (string: pending|proposed|confirmed|cancelled),
+                  total_price (decimal 8,2), total_duration (int),
+                  proposed_starts_at (datetime nullable), proposed_by FK
+                  (nullable), cancelled_by FK (nullable), timestamps,
+                  softDeletes.
+    (Índices: starts_at, status, user_id, worker_id)
+
+- 2026_08_20_053928_create_appointment_services_table.php
+    appointment_services (pivote): id, appointment_id FK, service_id FK,
+                  price (decimal 8,2) SNAPSHOT, name (string) SNAPSHOT,
+                  timestamps. Unique(appointment_id, service_id).
+
+- 2026_08_20_053929_create_business_hours_table.php
+    business_hours: id, day_of_week (tinyint 0-6, unique), open_time (time),
+                    close_time (time), active (bool), timestamps.
+
+- 2026_08_20_053930_create_business_hour_overrides_table.php
+    business_hour_overrides: id, date (date, unique), open_time (time nullable),
+                             close_time (time nullable), is_closed (bool),
+                             timestamps.
+
+- 2026_08_20_053931_create_notifications_table.php
+    (esquema estándar de Laravel para notificaciones en base de datos)
+
+NOTA: la migración create_push_subscriptions_table fue ELIMINADA junto con
+todo el flujo de Web Push.
+
+================================================================================
+5. BACKEND
+================================================================================
+
+5.1 ENUMS
+--------------------------------------------------------------------------------
+app/AppointmentStatus.php
+    enum AppointmentStatus: string
+    {
+        case Pending   = 'pending';
+        case Proposed  = 'proposed';
+        case Confirmed = 'confirmed';
+        case Cancelled = 'cancelled';
+    }
+
+app/UserRoles.php
+    enum UserRoles: string
+    {
+        case Admin  = 'admin';
+        case Worker = 'worker';
+        case User   = 'user';
+    }
+
+5.2 MODELOS
+--------------------------------------------------------------------------------
+app/Models/User.php
+    - Authenticatable + MustVerifyEmail + Notifiable + HasFactory + SoftDeletes.
+    - Campo role casteado a UserRoles.
+    - El correo de verificación es un EmailVerify (blade) en lugar del
+      predeterminado de Laravel.
+
+app/Models/Appointment.php
+    - Casteos: starts_at/proposed_starts_at datetime, status enum,
+      total_price decimal:2 (devuelve string "150.50"), total_duration int.
+    - Relaciones: user(), worker(), proposer(), canceller(), services()
+      (belongsToMany con withPivot(['price','name'])).
+    - effectiveStart(): CarbonInterface -> proposed_starts_at ?? starts_at
+      (la hora a la que realmente se realizará la cita).
+    - scopeActiveBooking(): estados pending/proposed/confirmed (las citas
+      canceladas ya no ocupan agenda).
+
+app/Models/BusinessHour.php
+    - day_of_week unique + active. forDate(Carbon): busca el día de semana
+      correspondiente (dayOfWeek 0=domingo... 6=sábado -> 0-6).
+
+app/Models/BusinessHourOverride.php
+    - Cast 'date' => 'date:Y-m-d' (IMPORTANTE: con este formato el valor se
+      guarda como "Y-m-d" y las comparaciones por string coinciden en SQLite
+      y MySQL; con 'date' a secas se guardaba "Y-m-d H:i:s" y los
+      where('date', 'Y-m-d') fallaban en SQLite).
+    - forDate(Carbon): where('date', $date->toDateString()).
+
+app/Models/Service.php
+    - Catálogo de servicios con HasFactory.
+
+5.3 SERVICIO DE NEGOCIO (clave)
+--------------------------------------------------------------------------------
+app/Services/BusinessHoursService.php
+
+    SLOT_INTERVAL_MINUTES = 30
+
+    hoursForDate(Carbon $date): ?array
+        - Busca BusinessHourOverride::forDate($date).
+          - Si existe y está cerrado o no tiene open/close -> null (cerrado).
+          - Si existe -> ventana [open, close] del override.
+        - Si no hay override -> BusinessHour::forDate($date); si no hay horario
+          semanal activo -> null.
+        - Devuelve ['open' => Carbon, 'close' => Carbon].
+
+    isWithinHours(Carbon $startsAt, int $durationMinutes): bool
+        - Comprueba que [startsAt, startsAt+duration] quepa en la ventana.
+
+    availableSlots(Carbon $date, int $durationMinutes, ?Carbon $now = null)
+        - Genera los slots "H:i" cada 30 min dentro de la ventana, descartando
+          los que ya pasaron (cursor > now) y los que no dejan caber la
+          duración completa (end <= close).
+
+    hasConflict(int $workerId, Carbon $startsAt, int $durationMinutes, ?Appointment $ignore)
+        - Busca citas activas del barbero en [startsAt-duration, end+duration]
+          y detecta solape real [start, end) con la candidata.
+
+    availableSlotsForWorker(int $workerId, Carbon $date, int $durationMinutes)
+        - availableSlots() menos las horas con conflicto del barbero.
+        - Es lo que consume el endpoint de availability y el flujo de agendar.
+
+    busyBlocks(int $workerId, Carbon $date): Collection
+        - Bloques ocupados [start, end] para el detalle.
+
+5.4 POLICIES
+--------------------------------------------------------------------------------
+app/Policies/AppointmentPolicy.php
+    - create: el rol del usuario es 'user' (solo clientes agendan).
+    - view: es el user_id o el worker_id de la cita.
+    - confirm/reject/propose/cancel: la cita está en un estado negociable
+      (pending/proposed) o confirmada (cancel) Y el usuario es parte de la cita
+      (quien NO propuso la hora puede confirmarla; cualquiera de las partes
+      puede proponer/rechazar).
+
+app/Policies/BusinessHourPolicy.php
+    - viewAny/update/delete: solo rol 'admin'.
+
+app/Policies/ServicePolicy.php
+    - Aplicada a la gestión de catálogo de servicios (admin).
+
+5.5 FORM REQUESTS
+--------------------------------------------------------------------------------
+- StoreAppointmentRequest:
+    worker_id: required|integer|exists:users,id (y el worker tiene rol
+               worker/admin).
+    date: required|date.
+    time: required|date_format:H:i.
+    services: required|array|min:1|max:10.
+    services.*: integer|distinct|exists:services,id,active,1.
+    withValidator(): revalida que la hora propuesta quepa dentro del horario
+    (BusinessHoursService::isWithinHours) y que no haya conflicto con otras
+    citas (hasConflict). Si no -> ValidationException.
+
+    IMPORTANTE (Laravel 13): Rule::whereIn NO existe. En su lugar se usa
+        Rule::exists('users', 'id')->whereIn('role', [Worker, Admin]).
+
+- ProposeAppointmentRequest:
+    starts_at: required|date_format:Y-m-d H:i:s|after:now.
+    withValidator(): comprueba ventana de horario y ausencia de conflictos para
+    la nueva hora propuesta.
+
+- BusinessHourRequest: day_of_week required|integer|between:0,6, open_time y
+  close_time required|date_format:H:i, active boolean. Valida open < close y
+  que al menos un día esté activo si se desactiva uno (para no dejar la
+  barbería sin agenda).
+
+- BusinessHourOverrideRequest: date required|date, is_closed boolean, y si no
+  está cerrado open_time/close_time required con open < close.
+
+- RegisterRequest / LoginRequest / AddWorkerRequest / UpdateRoleWorkerRequest /
+  UpdateActiveServiceRequest / SubscribePushRequest (ESTE ÚLTIMO ELIMINADO con
+  el flujo de Web Push).
+
+5.6 CONTROLADORES
+--------------------------------------------------------------------------------
+app/Http/Controllers/AppointmentsController.php
+    Rutas (todas bajo /dashboard, auth + verified):
+
+    GET    appointments/index        -> index()   (lista paginada según rol)
+    GET    appointments/create       -> create()  (form 3 pasos)
+    GET    appointments/availability -> availability() (slots JSON)
+    POST   appointments/store        -> store()   (crea cita + notifica barbero)
+    GET    appointments/{appointment}-> show()
+    POST   appointments/{appointment}/confirm
+    POST   appointments/{appointment}/reject
+    POST   appointments/{appointment}/propose
+    POST   appointments/{appointment}/cancel
+
+    index(): el cliente ve sus citas (user_id), el barbero/admin las asignadas
+    (worker_id). Paginación de 10 con eager loading (user, worker, services).
+
+    store(): calcula starts_at desde date+time, crea la cita en estado
+    pending con snapshot total_price/total_duration, adjunta los servicios con
+    snapshot price/name, y notifica al barbero (NewAppointmentRequest).
+
+    confirm(): si venía de 'proposed', toma proposed_starts_at como hora
+    definitiva; limpia los campos de propuesta; notifica a la otra parte
+    (AppointmentConfirmed).
+
+    reject()/cancel(): marcan cancelled + cancelled_by y notifican
+    (AppointmentCancelled).
+
+    propose(): pasa a 'proposed', guarda proposed_starts_at y proposed_by,
+    notifica a la otra parte (AppointmentTimeProposed).
+
+    notifyOtherParty(): envía la notificación a quien NO ejecutó la acción.
+
+    availableWorkers(): usuarios con rol worker/admin (los barberos posibles).
+    businessHoursPayload(): horario semanal + excepciones para el frontend.
+
+app/Http/Controllers/BusinessHoursController.php
+    GET    dashboard/business-hours              -> index()   (admin)
+    POST   dashboard/business-hours              -> store()
+    PUT    dashboard/business-hours/{hour}       -> update()
+    POST   dashboard/business-hours/overrides    -> storeOverride()
+    PUT    dashboard/business-hours/overrides/{override} -> updateOverride()
+    DELETE dashboard/business-hours/overrides/{override} -> destroyOverride()
+
+app/Http/Controllers/NotificationsController.php
+    GET  dashboard/notifications/latest -> latest() (polling, filtra por after)
+    POST dashboard/notifications/read   -> markAllRead()
+    (El método subscribe y su ruta notifications.subscribe fueron ELIMINADOS.)
+
+app/Http/Controllers/DashboardController.php
+    - dashboard: redirige según rol.
+    - dashboard/user: cita activa (proposed/pending/confirmed), próxima cita,
+      contador y próximas citas para el usuario.
+    - dashboard/worker: próximas citas asignadas + contadores.
+    - dashboard/admin: estadísticas del negocio (citas por estado, ingresos
+      estimados por mes, top servicios, citas de hoy) + "Mis citas" como
+      barbero + link a horarios.
+
+    Resto de controladores (auth): LoginController, LogoutController,
+    RegisterController, EmailController (verificación de correo),
+    ServiceController (catálogo CRUD admin), WorkersController (gestión de
+    barberos/roles por admin).
+
+5.7 MIDDLEWARE / SHARED PROPS
+--------------------------------------------------------------------------------
+app/Http/Middleware/HandleInertiaRequests.php
+    Comparte a todo el frontend:
+      - name (nombre de la app)
+      - auth.user, auth.hasVerifiedEmail
+      - auth.notifications (últimas 10) y auth.unreadNotificationsCount
+      - flash.success / flash.error (mensajes de sesión)
+    (Se eliminó vapidPublicKey junto con Web Push.)
+
+5.8 PROVIDER
+--------------------------------------------------------------------------------
+app/Providers/AppServiceProvider.php
+    - Date::use(CarbonImmutable::class) -> TODO el app usa Carbon inmutable
+      (por eso Appointment::effectiveStart devuelve CarbonImmutable).
+    - Gate::before para dar al admin todo el poder.
+    - Password::defaults (password seguro por defecto).
+    (Se eliminó el singleton de WebPush.)
+
+================================================================================
+6. FRONTEND (resources/js)
+================================================================================
+
+6.1 ESTRUCTURA DE PÁGINAS (resources/js/pages)
+--------------------------------------------------------------------------------
+- Dashboard.tsx: comprueba el rol (auth.user.role) y renderiza el dashboard
+  correspondiente:
+      user   -> Dashboard/User/UserDashboard
+      worker -> Dashboard/Worker/WorkerDashboard
+      admin  -> Dashboard/Admin/AdminDashboard
+- Dashboard/User/UserDashboard.tsx: cita activa (propuesta pendiente/por
+  confirmar), próxima cita, contador de próximas y botón "Nueva cita".
+- Dashboard/Worker/WorkerDashboard.tsx: próximas citas asignadas con
+  resumen de estado y acceso al listado completo.
+- Dashboard/Admin/AdminDashboard.tsx: tarjetas de estadísticas (citas por
+  estado, ingresos del mes, top servicios, citas de hoy), lista "Mis citas"
+  como barbero y enlace a BusinessHours.
+- Dashboard/Appointments/AppointmentsIndex.tsx: listado paginado de citas con
+  filtro por estado y link al detalle.
+- Dashboard/Appointments/AppointmentCreate.tsx: formulario en 3 pasos
+  (ver sección 7).
+- Dashboard/Appointments/AppointmentShow.tsx: detalle completo con estados,
+  tabla de servicios (nombre, precio, duración), totales y acciones.
+- Dashboard/BusinessHours/BusinessHours.tsx: gestión de horario semanal
+  (activa/desactiva días) y de excepciones por fecha (cerrar o horario
+  especial). Solo admin.
+
+6.2 COMPONENTES
+--------------------------------------------------------------------------------
+resources/js/Components/Appointments/
+- AppointmentActions.tsx: botones de confirmar/rechazar/proponer/cancelar
+  según estado y rol (usa las policies para decidir qué mostrar).
+- AppointmentCard.tsx: tarjeta compacta de cita (usada en dashboards).
+- AppointmentActions usa el modal ProposeTimeModal para proponer hora.
+- AppointmentsSection.tsx: sección reutilizable "Tus citas".
+- StatusBadge.tsx: badge de estado con colores (pending=ámbar,
+  proposed=azul, confirmed=verde, cancelled=rojo).
+- ProposeTimeModal.tsx: modal HeroUI v3 con selector de hora para proponer.
+
+resources/js/Components/Notifications/
+- NotificationsBell.tsx: campanita con contador, panel de notificaciones,
+  click navega a la cita y "marcar leídas". Polling cada 30s a
+  notifications.latest.
+  (Se eliminó el hook useBrowserNotifications y el botón "Activar
+  notificaciones del navegador".)
+
+Otros: Navbar (con logo, enlaces, campanita y botón "Nueva Cita"), Button,
+inputs (TextInput, SelectInput), Pagination, Footer.
+
+6.3 TIPOS (resources/js/types/index.ts)
+--------------------------------------------------------------------------------
+- User, Appointment (con status, services, pivot con price/name snapshot,
+  proposed_starts_at, proposed_by, cancelled_by, created_at...), Service,
+  NotificationItem (id, data {type, message, url...}, read_at, created_at),
+  AuthProps (user, hasVerifiedEmail, notifications, unreadNotificationsCount),
+  PageProps global (auth, flash, name...).
+
+6.4 LIBRERÍAS DE UTILIDADES
+--------------------------------------------------------------------------------
+- resources/js/lib/utils.ts: helpers para formatear fechas/horas y estados.
+- route() de Ziggy (generado) -> rutas tipadas del backend.
+
+================================================================================
+7. FLUJOS DE NEGOCIO
+================================================================================
+
+7.1 AGENDAR (solo rol user)
+--------------------------------------------------------------------------------
+1. AppointmentCreate carga services (activos), workers (worker+admin) y
+   businessHours.
+2. Paso 1: elige servicios (multi). Se muestra el total estimado
+   (suma de precio y duración).
+3. Paso 2: elige día (solo días con horario, respetando overrides) y hora.
+   Cada vez que cambia día/barbero, se llama a GET appointments/availability
+   con ?date=&worker_id=&services[]= y se muestran las horas libres reales.
+4. Paso 3: elige barbero y envía el formulario (POST appointments/store).
+5. El backend valida de nuevo horario y conflicto (StoreAppointmentRequest).
+6. Se notifica al barbero y se redirige al detalle con flash success.
+
+7.2 NEGOCIACIÓN (barbero -> cliente y viceversa)
+--------------------------------------------------------------------------------
+- pending: el barbero puede confirmar / rechazar / proponer hora.
+- proposed: el cliente (y el barbero) puede confirmar (adopta la hora
+  propuesta) / rechazar / proponer a su vez.
+- confirmed: cualquiera de las dos partes puede cancelar (si es futura).
+- Toda acción dispara una notificación al otro lado y un flash.
+
+7.3 HORARIOS (admin)
+--------------------------------------------------------------------------------
+- Horario semanal: activar días y definir open/close por día.
+- Excepciones: una fecha concreta puede estar cerrada o tener horario propio.
+- Las excepciones tienen prioridad sobre el semanal (se corrigió el bug del
+  cast de fecha).
+
+================================================================================
+8. BUGS REALES ENCONTRADOS Y CORREGIDOS
+================================================================================
+
+1. Rule::whereIn no existe (Laravel 13)
+   Se usaba Rule::whereIn('role', [...]) en StoreAppointmentRequest y el test
+   de validación fallaba. Se sustituyó por:
+       Rule::exists('users', 'id')->whereIn('role', [UserRoles::Worker->value, UserRoles::Admin->value])
+   (esto es un fallo real de la app: la validación del worker nunca funcionaba).
+
+2. Tipo de retorno de Appointment::effectiveStart()
+   El app usa Date::use(CarbonImmutable::class); el método devolvía
+   Illuminate\Support\Carbon (mutable) y en algunos caminos retornaba
+   CarbonImmutable -> TypeError. Se cambió la firma a
+   `: Carbon\CarbonInterface` (interfaz común).
+
+3. UserFactory sin 'phone'
+   La columna phone es NOT NULL y unique; el factory no la generaba y los
+   tests (y seeders) explotaban con violación de unicidad/null. Se añadió
+   `'phone' => fake()->unique()->e164PhoneNumber()` (o similar).
+
+4. Modelo Service sin HasFactory
+   Service::factory() no existía; se añadió el trait HasFactory.
+
+5. BusinessHourOverride: cast de fecha y prioridad de excepciones (BIG)
+   El cast 'date' => 'date' guarda el valor como "Y-m-d H:i:s". En SQLite
+   (base de tests) el where('date', '2026-08-21') NO coincidía, por lo que:
+     - El test de cierre fallaba al hacer firstOrFail.
+     - La excepción con horario especial NO tenía prioridad: se devolvían los
+       slots semanales (09:00) en lugar de los del override (14:00).
+   Se cambió el cast a 'date:Y-m-d', que guarda la fecha como "Y-m-d" y hace
+   que la comparación con toDateString() funcione en SQLite y MySQL.
+   Esto restaura la prioridad de las excepciones sobre el horario semanal.
+
+6. Asserts de tests con decimales
+   total_price con cast decimal:2 devuelve string ("150.50"), no float.
+   Se ajustó la aserción del test a toBe('150.50').
+
+7. Inertia v3: setData(key, callback) no acepta callback
+   En AppointmentCreate se usaba setData('time', (d) => ...); Inertia v3 solo
+   acepta el valor directo. Se reescribió para calcular el valor desde `data`.
+
+8. HeroUI v3 API de Modal/Button
+   ProposeTimeModal: se migró a useOverlayState() + state={state} + onPress;
+   los botones usan isDisabled/aria-label en lugar de disabled/title.
+
+9. Notificaciones: route() descarta parámetros no escalares (Laravel 13)
+   En tests, route('notifications.latest', ['after' => $carbon]) perdía el
+   parámetro por ser objeto Carbon. Se pasa la fecha formateada a string.
+
+10. ESLint con ziggy.js
+    resources/js/ziggy.js es generado; se añadió a ignore en eslint.config.js
+    para no romper el lint en cada build.
+
+11. Hora mostrada de la cita incorrecta (bug de zona horaria)
+    Laravel 13 serializa las fechas con toJSON(), que añade el offset de UTC
+    (ej. "2026-08-21T11:30:00Z"). El frontend formateaba en la zona horaria
+    del navegador, así que una cita agendada a las 11:30 se mostraba a las
+    4/5 (desplazada por el offset del navegador).
+    FIX: se sobrescribió serializeDate() en Appointment (formato "Y-m-d H:i:s")
+    y en BusinessHourOverride (formato "Y-m-d"), serializando la hora de muro
+    sin zona horaria. El frontend la interpreta como hora local y muestra la
+    hora correcta. También se formatea created_at de las notificaciones en
+    HandleInertiaRequests con el mismo criterio.
+
+12. Modal "Proponer hora": botones desbordados
+    La estructura HeroUI v3 era incorrecta: Modal.Body y Modal.Footer estaban
+    anidados dentro de Modal.Header, y los dos botones usaban w-full en una
+    fila (se desbordaban).
+    FIX: se reestructuró a Modal.Backdrop + Modal.Container (size="md") +
+    Modal.Dialog con Header/Body/Footer como hermanos, y los botones del
+    footer pasaron a flex-1 para que quepan en una sola fila.
+
+13. Apagar un día de la semana no persistía
+    DayRow siempre enviaba POST a business-hours.store, cuya validación
+    marca day_of_week como único. Una vez que la fila existía, guardar de
+    nuevo fallaba la validación (en silencio) y el día seguía apareciendo
+    prendido.
+    FIX: DayRow ahora usa la ruta business-hours.update (PUT) cuando la fila
+    ya existe y business-hours.store (POST) solo para crearla. Además se
+    muestran los errores de validación (day_of_week) debajo de la fila.
+
+14. Orden de selección en el agendado (día -> hora -> barbero) + hora 12h
+    - Antes la hora dependía de elegir primero el barbero (paso 3), por lo
+      que los slots de hora nunca se mostraban en el paso "Día y hora".
+    - Se hizo worker_id opcional en el endpoint de availability: sin barbero
+      devuelve la unión de horas del negocio (availableSlots); con barbero,
+      las horas libres de ese barbero (availableSlotsForWorker).
+    - El paso 2 "Día y hora" ahora carga y deja seleccionar la hora sin
+      barbero; el paso 3 "Barbero" verifica que la hora elegida siga libre
+      para ese barbero y avisa (con mensaje ámbar) si no lo está.
+    - Las horas se muestran en formato 12h: "13:30" -> "1:30 PM"
+      (helper formatSlotTime para slots y formatTime en 12h para el resto de
+      la app: tarjetas, detalle y modal de proponer hora).
+    - Se añadió el test "la disponibilidad sin barbero usa solo el horario
+      del negocio". Suite final: 24 tests, 24 pass.
+
+================================================================================
+9. NOTIFICACIONES
+================================================================================
+
+9.1 EN APP (DEFINITIVO)
+--------------------------------------------------------------------------------
+- Notificaciones de citas: App\Notifications
+    * NewAppointmentRequest  (cliente -> barbero al agendar)
+    * AppointmentConfirmed   (quien confirma -> la otra parte)
+    * AppointmentCancelled   (al rechazar o cancelar)
+    * AppointmentTimeProposed (al proponer hora alternativa)
+- Base abstracta AppointmentNotification:
+    * via(): ['database'] (tabla notifications).
+    * toArray(): appointment_id, type (eventType), message, starts_at
+      (hora efectiva), actor_name y url (route('appointments.show', cita)).
+    * Guarda también quien fue el actor.
+- El frontend hace polling GET notifications/latest (filtra por `after` =
+  created_at de la última vista) y HandleInertiaRequests comparte las últimas
+  10 + contador de no leídas. La campanita (NotificationsBell) muestra el
+  panel, navega al detalle al hacer click y "marca leídas" vía POST
+  notifications/read.
+- Todas las notificaciones se encolan (ShouldQueue).
+
+9.2 WEB PUSH (ELIMINADO POR DECISIÓN DEL USUARIO)
+--------------------------------------------------------------------------------
+Se implementó en su momento: paquete minishlink/web-push, config/webpush.php,
+WebPushChannel, WebPushMessage, modelo PushSubscription, migración
+create_push_subscriptions_table, factory, public/sw.js (service worker),
+hook useBrowserNotifications.ts, botón "Activar notificaciones del navegador"
+en la campanita, ruta notifications.subscribe, controller NotificationsController
+@subscribe, request SubscribePushRequest, singleton WebPush en AppServiceProvider,
+llaves VAPID en .env, y tests de suscripción.
+
+El usuario pidió eliminarlo por completo. Se eliminó TODO:
+    - composer remove minishlink/web-push
+    - config/webpush.php
+    - app/Notifications/Channels/WebPushChannel.php
+    - app/Notifications/Messages/WebPushMessage.php
+    - app/Models/PushSubscription.php
+    - database/migrations/2026_08_20_053932_create_push_subscriptions_table.php
+    - database/factories/PushSubscriptionFactory.php
+    - public/sw.js
+    - resources/js/Components/Notifications/useBrowserNotifications.ts
+    - app/Http/Requests/SubscribePushRequest.php
+    - Relación User::pushSubscriptions(), singleton WebPush, ruta
+      notifications.subscribe, método subscribe, vapidPublicKey y variables
+      VAPID del .env.
+    - Tests de suscripción push en NotificationTest.
+    - AppointmentNotification::via() pasó a ['database'].
+
+Resultado: notificaciones en app como canal único. No quedan referencias a
+webpush/vapid/push_subscriptions en el código de la aplicación (app/,
+resources/, tests/, rutas). Se regeneró el autoload (composer dump-autoload).
+
+================================================================================
+10. TESTS (Pest)
+================================================================================
+
+tests/Feature/AppointmentBookingTest.php
+  - Helper setupOpenTomorrow(User $worker, int $durationMinutes): crea el
+    horario semanal de mañana 00:01-23:59 y devuelve el primer slot libre.
+  - Prueba: rol user agendando recibe 201/redirect; roles worker/admin NO
+    pueden crear citas (403); valida fecha inválida, hora pasada, worker sin
+    rol barbero, servicios inactivos; snapshot de precio/duración ("150.50");
+    snapshot del pivote (nombre/price); conflicto de horario del barbero;
+    notificación al barbero; flujo confirm (incluye adopción de hora
+    propuesta); rechazo; propuesta de nueva hora; cancelación.
+
+tests/Feature/BusinessHoursTest.php
+  - Solo admin gestiona horarios (403 para worker).
+  - Crear/actualizar horario semanal.
+  - Excepción de cierre bloquea la disponibilidad (slots = []).
+  - Excepción con horario especial tiene prioridad sobre el semanal
+    (slots = ['14:00','14:30']).
+  - Eliminar excepción restaura el horario semanal.
+
+tests/Feature/NotificationTest.php
+  - Polling devuelve las notificaciones nuevas.
+  - Polling filtra por `after`.
+  - "Marcar leídas" limpia el contador.
+  (Los 2 tests de suscripción push fueron eliminados.)
+
+Resultado final: 23 tests, 23 pass (66 aserciones).
+
+Cómo ejecutarlos:
+    php artisan test --colors=never
+    php artisan test --compact --filter=AppointmentBookingTest
+
+================================================================================
+11. VERIFICACIÓN Y COMANDOS
+================================================================================
+
+Comandos que deben quedar en verde tras cualquier cambio:
+
+    vendor/bin/pint --format agent            # formateo PHP
+    npm run types:check                       # tsc --noEmit
+    npm run lint:check                        # eslint .
+    npm run build                             # build de producción
+    php artisan test --colors=never           # suite de tests
+
+Estado actual:
+    - pint: OK (aplica estilo a todo el proyecto).
+    - types:check: OK.
+    - lint:check: OK (eslint.config.js ignora resources/js/ziggy.js).
+    - build: OK.
+    - tests: 23/23 OK.
+
+Comandos útiles:
+    php artisan route:list --path=appointments
+    php artisan route:list --path=business-hours
+    php artisan route:list --path=notifications
+
+================================================================================
+12. NOTAS DE ENTORNO
+================================================================================
+
+- OPENSSL_CONF: durante la implementación de Web Push se necesitó generar
+  llaves VAPID y openssl_pkey_new fallaba por una variable OPENSSL_CONF
+  inválida del sistema; se corrigió con setx (restaurar el valor previo si se
+  eliminó el uso de openssl). Al eliminar Web Push esta dependencia ya no se
+  usa, pero el arreglo de la variable de entorno queda aplicado en la máquina.
+
+- El proyecto no es repositorio git (por eso pint --dirty no funciona y se usa
+  `vendor/bin/pint --format agent`).
+
+- La salida de Pest se intercepta como JSON (php artisan test --colors=never
+  redirigido a archivo para leer el resultado completo).
+
+================================================================================
+13. PENDIENTES / MEJORAS FUTURAS
+================================================================================
+
+- Página pública de contacto/servicios (marketing) además del dashboard.
+- Notificaciones por correo además de la campanita (Mail channel).
+- Validación de disponibilidad con cola/transacción para evitar carreras.
+- Filtros avanzados en el listado de citas (rango de fechas, por servicio).
+- Tests de browser (Pest + Playwright) para el flujo de 3 pasos.
+- Estructura de .ai/rules: registrar decisiones durables (web push eliminado,
+  patrón de negociación, snapshot del pivote) para futuros agentes.

@@ -1,0 +1,308 @@
+CROWN BARBER — GUÍA DEL BACKEND
+================================
+
+Lee también FRONTEND_EXPLICADO.txt. Este archivo explica lo que pasa en el
+servidor: reglas, permisos, datos y respuestas. Está escrito para que puedas
+encontrar el archivo correcto y hacer cambios sin adivinar.
+
+1. EL MAPA MÁS SIMPLE
+---------------------
+El frontend es lo que la persona ve y toca. El backend es quien decide si
+una acción se permite, calcula el resultado y lo guarda. La base de datos
+es el lugar donde los datos quedan guardados.
+
+Ejemplo: Ana pide una cita. Su pantalla manda los datos. Una ruta recibe la
+petición. Un controlador la dirige. Una clase de validación comprueba los
+datos. Un servicio calcula las horas disponibles. Un modelo guarda la cita
+en la base de datos. El controlador devuelve la siguiente pantalla.
+
+Palabras que vas a ver en el código:
+- Ruta: la dirección y el tipo de acción, como GET para consultar o POST
+  para enviar. Todas las rutas de la app están en routes/web.php.
+- Controlador: clase que recibe una petición y prepara la respuesta.
+- Modelo: clase que representa datos guardados en una tabla.
+- Migración: archivo que crea o cambia una tabla.
+- Request: clase que valida lo que envía la persona.
+- Policy: clase que decide quién tiene permiso.
+- Servicio: clase que agrupa reglas de negocio, como horarios o fidelidad.
+- Inertia: puente que entrega datos de Laravel a una pantalla de React.
+- Prop: dato que el backend entrega a una pantalla.
+
+La dirección del recorrido es:
+Navegador -> routes/web.php -> controlador -> Request y Policy ->
+servicios/modelos -> base de datos -> Inertia -> pantalla React.
+
+2. CÓMO ARRANCA LA APP
+----------------------
+Es una app Laravel 13 con PHP 8.4. El punto de entrada de Laravel carga la
+configuración de bootstrap/app.php, que registra las rutas web y el
+middleware HandleInertiaRequests. Un middleware trabaja alrededor de una
+petición; este comparte datos comunes con las pantallas.
+
+routes/web.php es el índice de acciones. Lee una línea así:
+Route::get('servicios', [PublicSiteController::class, 'services'])
+como: "si alguien visita /servicios, ejecuta el método services del
+controlador PublicSiteController". El name(...) da un nombre estable a la
+ruta. Busca ese nombre en el frontend para saber qué botón la usa.
+
+Las rutas públicas no piden cuenta: inicio, servicios, barberos y cómo
+funciona. Login y registro solo son para visitantes sin sesión. Todas las
+rutas /dashboard/... piden sesión. Algunas exigen además un rol o un
+permiso. No basta con ocultar un botón: el servidor vuelve a comprobarlo.
+
+3. USUARIOS, SESIÓN Y ROLES
+---------------------------
+app/Models/User.php representa cada cuenta. app/UserRoles.php define tres
+roles: user (cliente), worker (barbero) y admin (administrador). El rol
+controla las acciones disponibles.
+
+RegisterController crea una cuenta de cliente y abre su sesión.
+RegisterRequest comprueba los datos del registro. LoginController verifica
+correo y contraseña; también limita intentos. LogoutController cierra la
+sesión. La app tiene rutas de verificación de correo, pero el registro y el
+cambio de correo actuales no obligan a verificarlo para usar la app.
+
+El cliente puede reservar y ver sus propias citas y tarjeta. El barbero ve
+las citas que le asignaron y puede responder o completarlas. El admin
+también puede ser elegido como barbero, administra servicios, barberos y
+horarios, y ve las citas donde está asignado. El panel no muestra
+automáticamente todas las citas de todos los barberos al admin.
+
+Los permisos están en app/Policies. AppointmentPolicy decide, por ejemplo,
+quién puede ver, crear, confirmar, proponer, cancelar y completar una cita.
+ServicePolicy, UserPolicy y BusinessHourPolicy protegen las áreas de
+administración. Algunas comprobaciones se hacen con #[Authorize(...)] en
+los controladores; otras se hacen en los Requests. Si recibes un error 403,
+busca primero la Policy correspondiente.
+
+4. LAS TABLAS Y CÓMO SE RELACIONAN
+----------------------------------
+Los archivos de database/migrations definen las tablas. No son los datos:
+son las instrucciones para construir el lugar donde se guardan los datos.
+Los archivos de app/Models representan esas tablas dentro de PHP.
+
+Tablas principales:
+- users: clientes, barberos y admins; incluye rol, teléfono y preferencias
+  de notificación. También guarda especialidad, descripción, rutas de la
+  foto de perfil y portada, y una lista de fotos de trabajos.
+- services: nombre, descripción, precio, duración en minutos, activo,
+  slug y tipo de premio de fidelidad. Slug es un nombre corto para URLs.
+- appointments: cliente, barbero, fecha/hora, estado, total, duración,
+  propuesta de nueva hora, cancelación y datos de fidelidad.
+- appointment_services: une cada cita con sus servicios. Guarda el nombre
+  y precio que tenían al reservar. Así un cambio posterior en el catálogo
+  no altera la cuenta de una cita anterior.
+- business_hours: horario semanal. day_of_week indica el día.
+- business_hour_overrides: excepciones para una fecha concreta, por
+  ejemplo cerrar un festivo o abrir con otro horario.
+- notifications: avisos dentro de la app.
+- browser_push_subscriptions: navegadores autorizados para recibir avisos
+  aunque la página esté cerrada.
+- sessions, cache y jobs: datos técnicos de Laravel.
+
+Una cita pertenece a un cliente (user_id) y a un barbero (worker_id); puede
+tener varios servicios. Los modelos User, Service y Appointment admiten
+"borrado suave": al borrar se marca deleted_at, y el historial puede
+conservarse. No borres datos directamente en la base de datos para arreglar
+un error visual.
+
+5. PÁGINAS PÚBLICAS Y CATÁLOGO
+------------------------------
+PublicSiteController prepara el sitio público. La portada muestra hasta
+cuatro servicios y cuatro barberos. /servicios muestra servicios activos;
+/barberos muestra cuentas worker y admin; /como-funciona enseña el horario
+semanal. Estos datos salen de la base de datos: no hay que repetir el
+catálogo a mano en esas pantallas.
+
+ServiceController maneja la lista, creación, edición, activación y borrado
+de servicios en /dashboard/services. ServiceRequest valida nombre,
+descripción, precio, duración y tipo de premio. Solo el admin tiene permiso.
+Un servicio inactivo deja de aparecer para nuevas reservas. Cambiar su
+precio no reescribe el precio guardado en citas ya creadas.
+
+WorkersController hace lo mismo para barberos en /dashboard/workers. Puede
+crear, editar, cambiar el rol y borrar. Sus reglas de validación están en
+los Requests de app/Http/Requests. La cuenta es un User con rol worker.
+
+WorkerPortfolioController permite publicar foto de perfil, portada,
+especialidad, descripción y hasta 12 trabajos. Cada trabajador y admin
+edita el suyo desde Mi cuenta; el admin puede editar los de todo el equipo.
+UpdateWorkerPortfolioRequest valida las imágenes y los permisos.
+WorkerPortfolioService guarda los archivos en storage/app/public/workers,
+con nombres nuevos; borra los reemplazados solo después de guardar bien.
+Cada foto de galería tiene un id para quitarla sin aceptar rutas extrañas.
+User::publicWorkerProfile entrega únicamente los datos públicos, sin correo
+ni teléfono. /barberos/{worker} muestra el perfil y sus trabajos a cualquiera.
+
+6. HORARIOS Y HUECOS LIBRES
+---------------------------
+BusinessHoursController guarda el horario semanal y las excepciones por
+fecha. Solo el admin puede modificarlo. BusinessHoursService es el lugar
+central para preguntar "¿abre ese día?" y "¿cabe esta cita?".
+
+Primero se mira si existe una excepción para la fecha. Si existe, manda
+esa excepción. Si no, manda el horario semanal. Si el día está cerrado no
+hay horas. Si está abierto, se comprueba que toda la duración de los
+servicios quepa antes del cierre. Se ofrecen comienzos cada 30 minutos y
+se descartan horas pasadas o que chocan con otra cita activa del barbero.
+
+La pantalla puede mostrar días que parecen abiertos, pero la respuesta
+final de horas viene del servidor mediante GET /dashboard/appointments/
+availability. Al guardar, StoreAppointmentRequest vuelve a validar. Esto
+importa porque dos personas podrían mirar la misma hora al mismo tiempo.
+
+7. LA VIDA COMPLETA DE UNA CITA
+-------------------------------
+El estado se define en app/AppointmentStatus.php:
+- pending: el cliente pidió la cita; espera respuesta del barbero.
+- proposed: alguien propuso otra hora; espera a la otra parte.
+- confirmed: ambos aceptaron la hora.
+- cancelled: se rechazó o canceló.
+- completed: terminó la duración y se registró la visita.
+
+AppointmentsController maneja las rutas de citas:
+- create prepara servicios activos, barberos, horario y tarjeta.
+- availability devuelve las horas disponibles en formato JSON.
+- store crea la cita pending, suma precios y minutos, guarda los servicios
+  y avisa al barbero.
+- index lista citas de la persona que inició sesión, con filtros y páginas.
+- show muestra una cita concreta y sus acciones permitidas.
+- confirm acepta la solicitud o la última hora propuesta.
+- propose guarda una hora alternativa. La otra parte debe responder.
+- reject rechaza una solicitud/propuesta y cancela la cita.
+- cancel cancela una cita confirmada futura.
+- complete registra que se atendió la visita y actualiza fidelidad.
+
+StoreAppointmentRequest valida que haya servicios activos, sin repetidos,
+un barbero válido, fecha futura, horario abierto y tiempo sin choque.
+ProposeAppointmentRequest comprueba la hora alternativa. La Policy impide
+ver una cita ajena o actuar fuera de turno. Por ejemplo, una cita pending
+la confirma el barbero; en proposed responde quien NO propuso la última
+hora. El barbero asignado solo puede completar una cita confirmed cuando
+ya terminó su duración. FilterAppointmentsRequest controla filtros de hoy,
+semana, mes y rangos; se aplican antes de separar la lista en páginas.
+
+Ejemplo de Ana: elige Corte, a Luis y las 10:00. Se guarda una cita
+pending. Luis confirma y pasa a confirmed. Al terminar toda su duración,
+la app la registra automáticamente como completed y añade su sello.
+Las solicitudes pendientes, propuestas y canceladas no suman. El servicio
+sincroniza al abrir tarjeta, citas o panel; además el comando
+php artisan loyalty:sync-visits revisa visitas vencidas. Está programado
+cada minuto en routes/console.php. Para ejecutarlo con la app cerrada, el
+servidor debe tener activo el programador de Laravel.
+
+8. TARJETA DE FIDELIDAD DE 10 DÍAS
+----------------------------------
+app/Services/LoyaltyService.php tiene la regla principal. No se cuentan
+"10 citas" sin más: se cuentan días distintos en los que se completó una
+visita pagada. Una sola fecha puede dar como máximo un sello, aunque haya
+dos citas o dos barberos. Tras nueve días pagados, el siguiente día de
+visita puede tener un corte o facial gratis. No puede ganar nueve sellos y
+canjear el premio el mismo día.
+
+Al terminar esa décima visita confirmada, se aplica automáticamente el
+premio. Si la cita tiene varios cortes o faciales elegibles, se hace gratis
+el de mayor precio guardado al reservar. El servicio debe estar en esa
+cita y estar marcado en services
+con loyalty_reward_type = haircut o facial. Solo ese servicio se descuenta;
+otros servicios de la misma cita se cobran. El descuento usa el precio que
+se guardó cuando se reservó, aunque hoy el catálogo tenga otro precio.
+El sistema conserva el precio original en appointment_services y guarda
+el descuento y nombre del premio en appointments.
+
+El sistema calcula sellos, premios disponibles, canjes y visitas a partir
+de citas completadas. No guarda un número de sellos que alguien pueda
+editar a mano. LoyaltyController entrega el resumen e historial al cliente
+en /dashboard/loyalty. El backend impide contar dos veces la misma fecha
+con una restricción en la base de datos y hace el canje dentro de una
+transacción para evitar cambios a medias.
+
+El catálogo trae Facial de 75 minutos y $650; también se pueden marcar
+cortes elegibles desde Servicios. Es una tarjeta de fidelidad, no una
+pasarela de pago: la app no cobra ni comprueba un pago electrónico. Una
+cita confirmada que termina, con total mayor que cero y sin canje, cuenta
+como visita pagada. Si se completa otra cita ese mismo día, puede quedar como
+completed pero no añade otro sello.
+
+9. AVISOS Y PERFIL
+------------------
+Al crear, confirmar, proponer o cancelar una cita se envía un aviso a la
+otra parte. Las clases de app/Notifications preparan el texto y los datos
+de cada suceso. El aviso queda en notifications y aparece en la campana.
+NotificationsController consulta avisos y los marca como leídos.
+
+Los avisos del navegador requieren permiso en ese navegador y claves
+WebPush configuradas. PushSubscriptionsController guarda o quita la
+suscripción de ese navegador. WebPushChannel envía el aviso y limpia
+suscripciones caducadas. Esa entrega usa la cola de trabajos: si el
+trabajador de cola no está funcionando, la campana de la app puede mostrar
+el aviso aunque el aviso con la página cerrada tarde o no salga. No
+regeneres claves VAPID existentes: los navegadores suscritos dejarían de
+reconocerlas.
+
+HandleInertiaRequests comparte con todas las pantallas el usuario actual,
+las últimas notificaciones, su número sin leer, el estado del permiso push
+y los mensajes de éxito o error. ProfileController permite cambiar nombre,
+correo, teléfono, contraseña y preferencias de notificación del usuario
+que inició sesión. Cada acción valida sus datos con su Request.
+
+10. DÓNDE CAMBIAR ALGO
+-----------------------
+Usa esta receta cada vez que vayas a modificar una función:
+1) Encuentra la dirección o el nombre en routes/web.php.
+2) Abre el método del controlador indicado allí.
+3) Si llegan datos de un formulario, abre su Request de app/Http/Requests.
+4) Si hay permisos, abre la Policy correspondiente.
+5) Si hay cálculos, abre app/Services. Si hay datos guardados, abre el
+   modelo y la migración de la tabla.
+6) Busca la pantalla que recibe Inertia::render('Nombre/...'). Su archivo
+   está bajo resources/js/pages/Nombre/....
+7) Cambia las pruebas que demuestren el nuevo comportamiento y ejecútalas.
+
+Ejemplos concretos:
+- Cambiar el precio o duración de un servicio existente: entra como admin
+  a Servicios y edítalo. No hace falta cambiar PHP. Para cambiar qué
+  campos acepta el formulario, revisa ServiceRequest, ServiceController,
+  el modelo Service, el tipo Service de frontend y la pantalla de edición.
+- Cambiar la separación de horas ofrecidas: busca SLOT_INTERVAL_MINUTES
+  en BusinessHoursService. Revisa también su prueba y el calendario.
+- Cambiar el número de visitas del premio: empieza en LoyaltyService;
+  después revisa la tarjeta visual y las pruebas. No cambies solo el texto
+  de la pantalla: el servidor seguiría usando la regla anterior.
+- Agregar un dato permanente a una cita: crea una migración, actualiza
+  Appointment, su Request/controlador si se envía, el tipo TypeScript y
+  las pantallas donde se muestra. No edites una migración que ya se haya
+  ejecutado en un servidor: crea otra.
+- Cambiar quién puede confirmar: empieza en AppointmentPolicy, no en el
+  botón. Luego ajusta la pantalla y una prueba de permiso.
+
+11. CÓMO COMPROBAR UN CAMBIO SIN PERDER DATOS
+---------------------------------------------
+Abre la terminal en C:\Proyectos\CrownBarber. La app se sirve con Herd;
+no necesitas iniciar php artisan serve. Comandos útiles:
+
+  php artisan route:list --except-vendor
+  php artisan migrate:status --no-interaction
+  php artisan migrate --no-interaction
+  php artisan test --compact tests/Feature/LoyaltyTest.php
+  php artisan test --compact tests/Feature/AppointmentBookingTest.php
+  vendor/bin/pint --dirty --format agent
+  npm run types:check
+  npm run build
+
+Usa migrate solo cuando añadiste migraciones. No uses migrate:fresh sobre
+una base con datos reales: borra y reconstruye tablas. Los tests de Pest
+usan una base de prueba en memoria. Mira tests/Feature para ejemplos de
+comportamiento y database/factories para datos de prueba. Si el nombre de
+un archivo de prueba no existe, usa rg --files tests/Feature para verlo.
+Pint da formato a PHP; types:check revisa tipos del frontend; build prepara
+archivos para el navegador. Si cambias solo PHP, normalmente no necesitas
+reconstruir el frontend. Si cambias React o CSS y no ves el cambio, ejecuta
+npm run dev o npm run build.
+
+.env contiene configuración local y posibles secretos: no lo publiques.
+composer.json enumera paquetes PHP; package.json, los de JavaScript. Antes
+de copiar un ejemplo de internet, confirma la versión instalada. Para
+buscar una palabra en el proyecto puedes usar rg -n "palabra" app routes
+resources/js. Haz cambios pequeños, prueba el caso feliz y también un
+caso que deba rechazarse (por ejemplo una cita ajena).

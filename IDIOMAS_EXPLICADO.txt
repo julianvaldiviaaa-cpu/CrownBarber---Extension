@@ -1,0 +1,116 @@
+CROWN BARBER — ESPAÑOL / INGLÉS Y SCROLL SUAVE
+
+1. CÓMO CAMBIAR EL IDIOMA
+
+La barra superior muestra dos botones: ES y EN. Están disponibles en el sitio
+público, el panel y los formularios de acceso y administración.
+ES muestra la interfaz en español y EN la muestra en inglés.
+El cambio se realiza sin recargar la página ni reiniciar los formularios.
+
+2. DÓNDE ESTÁ LA CONFIGURACIÓN
+
+resources/js/lib/i18n.ts
+Contiene el estado del idioma, la función de traducción y useTranslation().
+Solo admite "es" y "en". Español es el idioma inicial.
+useSyncExternalStore informa a los componentes de React cuando cambia el idioma.
+useMemo crea una función t distinta por idioma, para que React y su compilador
+actualicen los textos correctamente.
+
+resources/js/lib/translations.ts
+Es el catálogo de traducciones. La clave es el texto original en español y el
+valor es su versión en inglés. No utiliza servicios externos de traducción.
+
+resources/js/Components/LanguageSwitcher.tsx
+Es el selector ES / EN. Usa botones accesibles con aria-pressed para indicar
+cuál está seleccionado. Se reutiliza en Navbar.tsx y PublicLayout.tsx.
+
+resources/js/Components/ApplicationRuntime.tsx
+Se monta una sola vez alrededor de la aplicación mediante withApp, en app.tsx.
+Restaura el idioma guardado e inicia el scroll global. Mantiene la misma
+instancia durante la navegación de Inertia.
+
+3. CÓMO SE GUARDA LA ELECCIÓN
+
+La elección se guarda en localStorage con la clave "crown-language".
+Al abrir nuevamente la aplicación se recupera esa elección.
+El evento storage sincroniza otras pestañas abiertas del mismo sitio.
+Si el navegador bloquea localStorage, el selector sigue funcionando durante
+la sesión; la preferencia no podrá conservarse después de recargar.
+La propiedad lang del documento también cambia para los lectores de pantalla.
+La preferencia pertenece a este navegador, no se guarda en la cuenta del usuario.
+
+4. CÓMO SE USA UNA TRADUCCIÓN
+
+En un componente:
+
+    import { useTranslation } from '@/lib/i18n';
+
+    const { t, intlLocale } = useTranslation();
+
+    <button>{t('Guardar cambios')}</button>
+    <input placeholder={t('Tu nombre')} />
+
+El catálogo contiene:
+
+    'Guardar cambios': 'Save changes',
+    'Tu nombre': 'Your name',
+
+Para añadir un texto nuevo, añade su traducción al catálogo y utiliza t() en
+el componente. Si un texto no está en el catálogo, se conserva tal cual.
+No hay que traducir los nombres de rutas, identificadores, roles internos,
+clases CSS ni valores que se envían al servidor.
+
+5. TEXTOS CON DATOS VARIABLES
+
+Se usan parámetros con nombre, evitando unir fragmentos traducidos:
+
+    t('Fidelidad de {name}', { name: customerName })
+
+    'Fidelidad de {name}': '{name}’s rewards'
+
+Esto permite que el inglés cambie el orden de la oración y mantiene los
+nombres y cantidades originales. Los parámetros se insertan como texto, no HTML.
+También hay plantillas para mensajes de validación y avisos de citas que
+llegan del servidor con fechas o nombres ya incluidos.
+La traducción inversa permite volver al español si un mensaje de estado ya
+había sido guardado en inglés dentro de un componente.
+
+6. QUÉ SE TRADUCE
+
+Se traducen navegación, páginas públicas, acceso, registro, cuenta, reservas,
+estados de citas, fidelidad, horarios, servicios, equipo, perfiles profesionales,
+etiquetas accesibles, avisos y los mensajes conocidos de los formularios.
+Los calendarios y las fechas usan es-MX o en-US mediante Intl.
+Los importes mantienen su moneda MXN: cambiar idioma no cambia precios.
+Los nombres y descripciones introducidos por usuarios o administradores se
+muestran como fueron escritos. Este cambio no traduce automáticamente los
+datos de la base de datos, los correos ni las notificaciones push del sistema.
+Los mensajes nuevos del servidor deben agregarse al catálogo para traducirse.
+
+7. LENIS EN TODA LA APLICACIÓN
+
+Lenis ya estaba instalado; no se añadieron dependencias.
+resources/js/lib/smooth-scroll.ts administra una única instancia para todas
+las páginas. Usa el ticker de GSAP y sincroniza ScrollTrigger.
+La instancia anterior se retiró de public-motion.ts, que conserva las
+animaciones del sitio público sin crear un segundo controlador de scroll.
+Al navegar, se sincroniza con la posición que restaura Inertia, incluyendo
+las visitas con preserveScroll, sin forzar siempre el inicio de la página.
+Los menús y diálogos conservan su desplazamiento interno y el scroll de fondo
+se detiene mientras un overlay bloquea la página.
+En pantallas táctiles se conserva el desplazamiento nativo.
+Si el usuario activa "reducir movimiento", se utiliza scroll nativo.
+
+Antes de cambiar de idioma, PublicLayout revierte SplitText. Después vuelve
+a crear las animaciones con los nuevos textos para evitar que GSAP interfiera
+con los nodos que administra React.
+
+8. COMPROBACIONES
+
+    node --test tests/Unit/language-and-scroll.test.mjs tests/Unit/watermelon-ui.test.mjs
+    npm run types:check
+    npm run build
+
+Las pruebas revisan traducciones y parámetros, almacenamiento bloqueado,
+sincronización entre pestañas, accesibilidad del selector, fechas, moneda,
+cobertura del catálogo, restauración de scroll, overlays y movimiento reducido.

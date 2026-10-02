@@ -1,0 +1,311 @@
+CROWN BARBER — GUÍA DEL FRONTEND
+================================
+
+Lee también BACKEND_EXPLICADO.txt. Este archivo explica todo lo que se ve
+y se toca: pantallas, botones, formularios, estilos y cómo hablan con el
+servidor. La idea es que puedas encontrar una parte y cambiarla tú mismo.
+
+1. QUÉ ES EL FRONTEND
+---------------------
+El frontend corre en el navegador. Enseña datos y recoge clics. El backend
+decide permisos, calcula y guarda; aquí se muestran sus respuestas. Esta
+app usa React, TypeScript, Inertia y CSS/Tailwind. TypeScript ayuda a
+describir la forma de los datos; React construye la pantalla con piezas.
+
+Palabras simples:
+- Componente: una pieza de pantalla que puedes reutilizar, como un botón
+  o una tarjeta.
+- Página: componente grande que ocupa una pantalla completa.
+- Prop: dato que entra a un componente, por ejemplo un servicio o una cita.
+- Estado: dato que cambia mientras usas una pantalla, como un campo escrito.
+- Evento: algo que haces, como pulsar, escribir o enviar un formulario.
+- Hook: función de React que ayuda con estado o comportamiento. Aquí verás
+  useState, useEffect, useForm, usePage, usePoll y useHttp.
+- Clase CSS: texto como bg-black o sm:px-8 que da aspecto y tamaño.
+- Responsive: la pantalla se acomoda a celular y computadora.
+
+Ejemplo: ves un servicio que dice $650. El precio viene del backend como
+prop; React lo dibuja; formatMoney le pone formato de pesos. Si cambias
+solo el texto del navegador, el precio verdadero no cambia. El admin debe
+editar el servicio o el backend debe cambiar su regla.
+
+2. CÓMO SE ELIGE UNA PANTALLA
+-----------------------------
+resources/views/app.blade.php es el cascarón HTML inicial. Carga los
+archivos hechos con Vite. resources/js/app.tsx arranca React e Inertia.
+vite.config.ts prepara esos archivos, Tailwind y las rutas de Wayfinder.
+
+Una ruta del backend llama, por ejemplo:
+Inertia::render('Dashboard/Loyalty', ['loyalty' => ...])
+Eso abre resources/js/pages/Dashboard/Loyalty.tsx y le entrega la prop
+loyalty. No hay que crear una segunda ruta en React. La dirección pública
+está en routes/web.php. Puedes abrir ese archivo y buscar el método del
+controlador que prepara la página.
+
+resources/js/types/index.ts y resources/js/types/auth.ts describen datos
+como Service, Appointment, Loyalty, User y NotificationItem. Si añades un
+campo que llega del servidor, normalmente debes añadirlo al tipo y a la
+pantalla que lo usa. Un tipo no guarda nada; solo ayuda a detectar errores
+antes de abrir la app.
+
+3. LAS TRES FORMAS DE PANTALLA
+-----------------------------
+resources/js/Layouts/PublicLayout.tsx envuelve el sitio público: portada,
+servicios, barberos y cómo funciona. Tiene su navegación y su estilo.
+resources/js/Layouts/FormLayout.tsx envuelve formularios como entrar,
+registrarse y reservar. resources/js/Layouts/AppLayout.tsx envuelve el
+área donde ya hay sesión: barra, navegación, mensajes y avisos. Si quieres
+modificar algo visible en muchas páginas de la app, revisa AppLayout antes
+de copiar cambios a cada página.
+
+AppLayout muestra Navbar, AppNavigation, FlashMessages y
+NotificationRuntime. Navbar contiene enlaces de arriba, menú para móvil,
+cuenta y campana. AppNavigation enseña pestañas según el rol: Inicio,
+Citas y Mi cuenta para todos; Mi fidelidad para clientes; Servicios,
+Equipo y Horarios para admins. FlashMessages muestra un éxito o error
+enviado por el servidor después de una acción.
+
+La sesión y los avisos compartidos llegan a todas las páginas mediante
+HandleInertiaRequests.php. En React se leen con usePage().props.auth y
+usePage().props.flash. Si auth.user no existe, nadie ha iniciado sesión.
+
+4. TODAS LAS PANTALLAS PÚBLICAS
+------------------------------
+resources/js/pages/welcome.tsx es la portada principal. Usa piezas de
+Components/PublicSections.tsx para mostrar servicios, barberos, pasos y
+preguntas. resources/js/pages/Services.tsx muestra todos los servicios
+activos. Barbers.tsx muestra los barberos. Experience.tsx enseña cómo
+funciona y el horario semanal. El backend entrega el contenido de
+servicios, barberos y horario; estas páginas deciden cómo mostrarlo.
+
+resources/js/pages/Auth/Login.tsx deja entrar con correo y contraseña.
+Register.tsx crea cuenta de cliente. EmailVerify.tsx enseña la pantalla de
+verificación si se llega a esa ruta; hoy la app no exige verificar correo
+para reservar. Los formularios usan useForm: guarda lo escrito, manda la
+petición y recibe errores por campo. Cuando el servidor rechaza un dato,
+la pantalla lo muestra junto al campo correspondiente.
+
+El sitio público conserva su propio diseño. Watermelon UI se usa sobre
+todo dentro de la app y en los formularios, no para rehacer la portada.
+
+5. PANEL SEGÚN EL TIPO DE PERSONA
+---------------------------------
+resources/js/pages/Dashboard/Dashboard.tsx es la entrada al panel. Mira
+auth.user.role y muestra una de estas piezas:
+- Roles/User/UserDashboard.tsx: citas del cliente, acceso a nueva cita y
+  tarjeta de fidelidad.
+- Roles/Worker/WorkerDashboard.tsx: citas asignadas al barbero.
+- Roles/Admin/AdminDashboard.tsx: resumen, accesos a servicios, equipo y
+  horarios, además de sus propias citas como barbero asignado.
+
+AppointmentsIndex.tsx enseña la lista completa de citas con filtros y
+páginas. Components/Appointments/AppointmentFilters.tsx envía los filtros
+al servidor. AppointmentsSection y AppointmentCard dibujan la lista y cada
+cita. StatusBadge traduce estados como pending a una etiqueta visible.
+No cambies el estado verdadero alterando solo la etiqueta.
+
+El panel y las listas usan usePoll cada 15 segundos. Eso pide datos
+nuevos para que aparezcan cambios hechos por otra persona. El intervalo
+está en resources/js/lib/utils.ts como POLL_INTERVAL_MS.
+
+6. RESERVAR UNA CITA, PASO A PASO
+--------------------------------
+resources/js/pages/Dashboard/Appointments/AppointmentCreate.tsx es la
+pantalla de reserva. Primero muestra los servicios activos. Al elegirlos
+suma su precio y sus minutos para enseñar un total aproximado. Después
+se elige barbero y fecha/hora. La página mira el horario recibido para
+mostrar días abiertos, pero pide las horas libres de verdad al servidor
+con la ruta appointments.availability. Mientras espera enseña un Skeleton.
+Si cambias servicios, barbero o fecha, vuelve a consultar horas.
+
+WorkerSelection.tsx dibuja cada trabajador con portada, foto de perfil,
+nombre y especialidad. Su botón Ver trabajos abre WorkerPortfolioView.tsx
+en una ventana sin borrar lo elegido. Cada foto se puede ampliar. También
+hay una página pública WorkerPortfolio.tsx para compartir el perfil y
+reservar con ese trabajador. WorkerAvatar.tsx muestra el retrato; si aún
+no hay foto real, usa la imagen de perfil predeterminada.
+
+Cuando el cliente pulsa el botón final, useForm envía los datos a la ruta
+appointments.store. El servidor valida otra vez, guarda la cita y manda
+un aviso. La página no decide por sí sola si una hora está libre ni cuánto
+se debe cobrar. Si el servidor rechaza algo, los errores llegan a useForm
+y se muestran en la pantalla.
+
+AppointmentShow.tsx es el detalle: cliente, barbero, fecha, servicios,
+duración, precio y estado. AppointmentActions.tsx enseña Confirmar,
+Rechazar o Cancelar según el caso. ProposeTimeModal.tsx permite proponer
+otro horario y consulta huecos libres. CompleteAppointment.tsx conserva
+la opción manual para registrar visitas. Ahora la app registra sola una
+cita confirmada cuando termina toda su duración y actualiza la tarjeta.
+La pantalla puede
+esconder acciones, pero el permiso real siempre lo comprueba el backend.
+
+7. LA TARJETA QUE VE EL CLIENTE
+-------------------------------
+Components/LoyaltyCard.tsx dibuja sellos, avance y premios disponibles.
+Dashboard/Loyalty.tsx muestra la tarjeta y el historial de días atendidos
+y canjes. También aparece un resumen en el panel y en el detalle de una
+cita. La tarjeta no crea sellos: muestra el resumen que calcula
+LoyaltyService.php. Nueve visitas pagadas en días distintos preparan el
+premio; en el siguiente día se puede hacer gratis un corte o facial.
+
+Si quieres cambiar el color o la distribución de los sellos, edita
+LoyaltyCard.tsx y los estilos. Si quieres cambiar cuántas visitas se
+necesitan, debes modificar primero el backend y después los textos,
+indicadores y pruebas del frontend. El facial del catálogo vale $650 y
+dura 75 minutos; esos números vienen de la base de datos, no de esta tarjeta.
+
+8. PANTALLAS DEL ADMIN
+----------------------
+Todo está bajo resources/js/pages/Dashboard/Roles/Admin/:
+- Services/Services.tsx: lista de servicios.
+- Services/ServiceCreate.tsx: formulario para crear.
+- Services/ServiceShow.tsx: detalle y edición; permite activar, desactivar
+  y escoger si sirve como premio haircut o facial.
+- Workers/Workers.tsx: lista del equipo.
+- Workers/WorkerCreate.tsx: crea un barbero.
+- Workers/WorkerShow.tsx: ve y cambia sus datos o rol.
+- BusinessHours/BusinessHours.tsx: horario semanal y excepciones por fecha.
+
+WorkerShow y Mi cuenta usan el mismo WorkerPortfolioEditor.tsx. Ahí se
+suben foto de perfil, portada y hasta 12 fotos de trabajos; también se
+escriben especialidad y descripción. Los cambios se publican al guardar.
+lib/worker-photos.ts reduce las fotos del celular y prepara archivos WebP.
+El formulario manda un POST con _method=put para que Laravel reciba fotos
+y trate la acción como una actualización. No envía rutas de archivos para
+borrar: envía los ids de fotos que pertenecen al perfil.
+
+En Horarios, algunos cambios se guardan automáticamente poco después de
+editar. Aparece un estado de "Guardando" o "Guardado" y un aviso si intentas
+salir con cambios pendientes. La pantalla usa useHttp para enviar cambios
+sin recargar todo. Guardar algo ahí cambia las horas de reserva para todos.
+
+Dashboard/Profile/Profile.tsx es Mi cuenta. Tiene datos personales,
+contraseña y ajustes de notificaciones. Esta página existe para los tres
+roles; solo cambia los datos de la cuenta que inició sesión.
+
+9. AVISOS, CAMPANA Y SONIDO
+---------------------------
+Components/Notifications/NotificationsBell.tsx muestra los avisos
+recientes, abre una cita al pulsarla y puede marcarlos como leídos.
+NotificationRuntime.tsx busca cambios periódicamente, decide si sonar la
+campanita y muestra la pregunta inicial para activar avisos del navegador.
+NotificationSettings.tsx permite encender o apagar esos avisos en este
+navegador y el sonido con la web abierta.
+
+public/service-worker.js es el pequeño programa que recibe avisos push
+cuando la página no está abierta. Para que eso funcione se necesitan un
+navegador compatible, permiso, HTTPS y configuración del servidor. La
+campana dentro de la app y el aviso push son dos formas de mostrar el
+mismo suceso; una puede funcionar aunque la otra no esté activada.
+
+resources/js/lib/notification-sound.ts genera el sonido. No se reproduce
+hasta que la persona interactúa con la página, porque los navegadores
+limitan la reproducción automática. Si algo aparece tarde, recuerda que
+la pantalla consulta actualizaciones cada 15 segundos.
+
+10. DISEÑO, WATERMELON UI Y CELULARES
+-------------------------------------
+resources/js/Components/Watermelon.tsx reúne las piezas de Watermelon UI
+adaptadas para esta app: Button, AnimatedButton, NativeButton, Input,
+NativeInput, Textarea, FloatingInput, Card, Badge, Table, Skeleton,
+Progress, DiscreteNavigation y Reveal. Su licencia está junto al archivo.
+resources/css/watermelon.css contiene sus estilos y movimientos dentro
+de .wm-app. Animaciones suaves aparecen al entrar a una pantalla, al
+tocar botones y en algunos estados de carga. Se respeta la preferencia
+del sistema de reducir movimiento.
+
+HeroUI sigue ayudando con campos, ventanas y comportamiento accesible.
+Tailwind da muchas clases pequeñas directamente en los archivos .tsx.
+resources/css/app.css carga estilos globales; crown.css da el aspecto del
+sitio público. Lucide aporta iconos; son dibujos, no botones por sí mismos.
+
+Para móviles verás clases como sm: y md:. Una clase sin prefijo se aplica
+desde pantallas pequeñas; sm: o md: la cambia cuando hay más espacio. Por
+ejemplo, grid-cols-1 md:grid-cols-2 significa una columna en celular y
+dos en una pantalla más grande. También hay tablas con desplazamiento
+horizontal para que no corten el contenido. Revisa siempre tu cambio en
+celular y en computadora.
+
+11. CÓMO SE HABLA CON EL BACKEND
+--------------------------------
+Link de Inertia navega entre páginas sin reconstruir toda la web. router
+envía acciones o recarga solo los datos necesarios. useForm controla
+formularios: data es lo escrito, setData lo cambia, errors son fallos del
+servidor y processing indica que se está enviando. useHttp se usa en
+interacciones pequeñas, como guardar horarios. usePoll actualiza datos
+periódicamente. fetch se usa para respuestas JSON concretas, como horas
+disponibles y suscripciones push.
+
+Wayfinder genera funciones de rutas en resources/js/routes y
+resources/js/actions. Usa esas funciones para conectar botones o
+formularios nuevos al backend, por ejemplo store.url() o dashboard.url().
+Algunas partes anteriores usan route('nombre') de Ziggy; también apunta
+a rutas de Laravel. No escribas direcciones fijas a mano si ya existe una
+ruta con nombre. No edites los archivos de rutas generadas: cambian al
+regenerar o compilar. Primero añade o modifica la ruta en routes/web.php.
+
+Los datos de una página llegan como props desde su controlador. Si un
+campo está vacío, revisa ambos lados: qué envía Inertia::render(...) en
+PHP y qué nombre espera la función de la página en React. También revisa
+el tipo de resources/js/types. Si falta una acción, busca su botón en los
+componentes y su permiso en el backend.
+
+12. RECETAS PARA HACER TUS PROPIOS CAMBIOS
+-------------------------------------------
+Cambiar un texto o color:
+1) Busca en resources/js la frase exacta con rg -n "frase" resources/js.
+2) Cambia el texto o las clases del componente encontrado.
+3) Mira la pantalla en celular y computadora. Si es un texto que viene de
+   la base de datos, cámbialo desde el admin o en el backend, no en JSX.
+
+Agregar un dato visible a una cita:
+1) Mira AppointmentShow.tsx y el tipo Appointment.
+2) Comprueba que AppointmentsController envía ese dato.
+3) Si es un dato nuevo que debe guardarse, crea también su columna y
+   regla en backend (ve la otra guía).
+4) Revisa lista, detalle y avisos si también deben mostrarlo.
+
+Agregar una opción a un formulario:
+1) Encuentra la página en resources/js/pages.
+2) Añade el campo al useForm y al formulario visible.
+3) Añade su validación en el Request de PHP y cómo se guarda en el
+   controlador/modelo. Sin eso, la pantalla puede enviar el campo pero
+   el servidor no lo usará.
+4) Muestra errors.nombreDelCampo para que la persona sepa qué corregir.
+
+Crear una nueva pantalla interna:
+1) Añade una ruta en routes/web.php y un método en un controlador.
+2) Haz que el método use Inertia::render('Ruta/De/Pagina', [datos]).
+3) Crea el .tsx correspondiente en resources/js/pages/Ruta/De/Pagina.tsx.
+4) Usa AppLayout y componentes existentes. Añade el enlace a
+   AppNavigation si tiene que aparecer en el menú.
+5) Protege la ruta con sesión y permisos en backend y prueba ambos casos:
+   persona permitida y persona no permitida.
+
+13. CÓMO VER SI TU CAMBIO FUNCIONÓ
+----------------------------------
+Abre la terminal en C:\Proyectos\CrownBarber. La app usa Herd; el
+frontend se actualiza con Vite. Comandos útiles:
+
+  npm run dev
+  npm run types:check
+  npm run format:check
+  npm run lint:check
+  npm run build
+  php artisan test --compact tests/Feature/AppointmentBookingTest.php
+
+npm run dev sirve para ver cambios mientras editas. types:check detecta
+campos o tipos incompatibles. format:check y lint:check revisan el estilo
+y posibles errores. build prepara la versión final. Las pruebas de PHP
+comprueban que las reglas del servidor siguen funcionando. Si hay un
+cambio de backend, ejecuta también la prueba de ese caso. No edites .env
+ni subas secretos. Haz un cambio pequeño, compruébalo y después sigue con
+el siguiente: así sabrás qué cambio produjo un error.
+
+Para orientarte cuando algo falla: una pantalla blanca o error de React
+suele apuntar a .tsx, types o props; un error 422 suele ser validación de
+un formulario; 403 suele ser permiso; 404 puede ser ruta o un registro que
+no existe; 500 suele venir del servidor. Mira el mensaje concreto antes
+de cambiar cosas al azar. El archivo BACKEND_EXPLICADO.txt te ayuda a
+seguir el resto del recorrido.

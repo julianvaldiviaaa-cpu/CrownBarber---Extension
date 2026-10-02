@@ -1,0 +1,129 @@
+/* Scoped Watermelon registry adaptations. PublicLayout does not use wm-app. */
+.wm-app {
+    min-height: 100dvh;
+    color: #171717;
+    background: #fafafa;
+    --wm-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+.wm-app > nav {
+    background: white;
+    border-bottom: 1px solid #0000000a;
+}
+.wm-button {
+    min-height: 44px;
+    cursor: pointer;
+    transition:
+        transform 180ms var(--wm-ease, ease-out),
+        box-shadow 180ms ease,
+        background-color 180ms ease;
+}
+.wm-button:disabled,
+.wm-button[data-disabled] {
+    cursor: not-allowed;
+}
+.wm-button:focus-visible,
+.wm-nav-item:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 4px;
+}
+.wm-button:active:not(:disabled):not([data-disabled]) {
+    transform: scale(0.98);
+}
+.wm-input {
+    min-width: 0;
+    transition:
+        border-color 160ms,
+        box-shadow 160ms;
+}
+.wm-input:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+.wm-card {
+    transition:
+        border-color 180ms,
+        box-shadow 180ms;
+}
+.wm-nav-item {
+    transition:
+        color 180ms,
+        background-color 180ms,
+        border-color 180ms;
+}
+.wm-table tbody tr {
+    transition: background-color 160ms;
+}
+.wm-table tbody tr:hover {
+    background: #00000003;
+}
+.wm-reveal {
+    animation: wm-enter 320ms var(--wm-ease, ease-out) backwards;
+    animation-delay: var(--wm-delay, 0ms);
+}
+.wm-stamp[data-filled='true'] {
+    animation: wm-stamp-in 350ms var(--wm-ease, ease-out) both;
+}
+.wm-stamp {
+    transition:
+        background-color 220ms,
+        border-color 220ms;
+}
+.wm-app .wm-navigation {
+    scrollbar-width: thin;
+}
+.wm-overlay {
+    animation: wm-enter 180ms ease-out;
+}
+@keyframes wm-enter {
+    from {
+        opacity: 0;
+        translate: 0 6px;
+    }
+    to {
+        opacity: 1;
+        translate: 0 0;
+    }
+}
+@keyframes wm-stamp-in {
+    from {
+        opacity: 0.6;
+        scale: 0.92;
+    }
+    to {
+        opacity: 1;
+        scale: 1;
+    }
+}
+@media (hover: hover) {
+    .wm-button:hover:not(:disabled):not([data-disabled]) {
+        transform: translateY(-1px);
+    }
+    .wm-card:hover {
+        box-shadow: 0 6px 20px #00000006;
+    }
+}
+@media (max-width: 640px) {
+    .wm-app input,
+    .wm-app select,
+    .wm-app textarea {
+        font-size: 16px;
+    }
+    .wm-app main {
+        padding-inline: 16px;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .wm-app *,
+    .wm-app *::before,
+    .wm-app *::after,
+    .wm-button,
+    .wm-overlay,
+    .wm-overlay * {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+    }
+    .wm-button {
+        transform: none !important;
+    }
+}
